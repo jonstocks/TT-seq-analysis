@@ -1,0 +1,124 @@
+## Initial Processing of FASTQ files 
+
+FASTQ files were combined into a single file for each direction of read using:
+
+```bash
+
+cat *1.fq.gz > <name>1.fq.gz
+cat *2.fq.gz > <name>2.fq.gz
+
+```
+
+FASTQC was run on each file to generate quality control assessments:
+
+
+```bash
+
+module load FastQC/0.12.1
+
+fastqc *.fq.gz --extract -o analysis/fastqc
+
+```
+
+Reads were trimmed to remove adaptors using TrimGalore:
+
+```bash
+
+module load TrimGalore/0.6.6
+
+trim_galore --paired --cores 16 --adapter $adapter_file --output_dir $output_dir $file1 $file2
+
+```
+
+
+## Read alignment
+
+SAMtools and Bowtie2 was used to align reads to hg38. A quality score was not used at this stage as many of the genes of interest (HSPs) have many isoforms and quality scores can result in there loss from the data.
+
+```bash
+
+module load samtools/1.6
+module load bowtie/2.2.6
+bowtie2 -p 16 -x $bowtieindex -1 $file1 -2 $file2 > $shortfile.sam
+
+samtools view -bS $shortfile.sam > $shortfile.bam
+rm $shortfile.sam
+samtools flagstat $shortfile.bam | tee $shortfile.flagstat.txt
+
+samtools sort $shortfile.bam > $shortfile.sorted.bam
+samtools index $shortfile.sorted.bam
+```
+
+A drosophila spike in was used, as test the number of reads of drosophila relative to human (generated with fastq screen) were used to produce initial scaling factors:
+
+```bash
+module load fastq_screen/0.11.4
+
+fastq_screen --conf fastq_screen.conf $FILE
+
+```
+
+fastq_screen.conf contained locations of genomes of interest.
+
+The drosophila reads were very inconsistant and were not used for further analysis.
+
+
+## Bigwig generation
+
+Initial bigwigs were generated to view data before size factors were produced, instead RPKM was used to normalise data. A blacklist was used to remove reads from repetitive regions:
+
+```bash
+
+module load BEDTools/2.25.0
+module load libpng/1.6.18
+module load ucsc/v326
+module load python/3.5.2
+
+bamCoverage -bl hg38-blacklist.v2.bed -p 4 -r chr14 --binSize 100 --normalizeUsing RPKM -b $1.sorted.bam -o $1.chr14.100.bw
+```
+
+Bigwigs were then viewed and plots were generated on the UCSC browser.
+
+
+## Read counting
+
+Feature counts was used to count the number of reads of each sample at each gene in gencode v44:
+
+```bash
+
+module load subread/1.5.2
+featureCounts -a gencode.v44.annotation.gtf -t gene -o counts.txt *sorted.bam
+
+```
+
+This generates a txt file with the count data for all samples that was then further analysed using R.
+
+## DESEQ2 analysis of count data
+
+Packages loaded:
+
+```R
+library(pasilla)
+library(tidyverse)
+library(tximport)
+library(here)
+library(janitor)
+library(devtools)
+library(yaml)
+library(SummarizedExperiment)
+library(DESeq2)
+library(gtools)
+```
+
+Count data was imported, the first five columns (chr, start, end, strand, length) were removed, 'sorted.bam' was removed from column names and the data was converted to a matrix:
+
+```R
+countdata <- read.table("counts.txt", header=TRUE, row.names=1)
+
+countdata <- countdata[ ,6:ncol(countdata)]
+
+colnames(countdata) <- gsub("\\.sorted.bam$", "", colnames(countdata))
+
+countdata <- as.matrix(countdata)
+```
+
