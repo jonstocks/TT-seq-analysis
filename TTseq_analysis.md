@@ -330,3 +330,132 @@ names(res_list) %>%
 nc <- as_tibble(counts(dds2,T),rownames="gene_id") %>% left_join(data.frame(rowData(dds2))[,1:8])
 write_csv(nc,here(res_dir,"deseq2_norm_counts.csv"))
 ```
+
+## Regenerate BWs with scale factors
+
+The scale factors generated with DESeq2 were used to remake BWs
+
+Scale factors are opposite for deseq/ (multiplied rather than divided or other way around) so need divide 1 by scale factor 1st
+
+e.g 1.5472687 -> 0.6463001545885
+
+```bash
+module load igmm/apps/samtools/1.6
+module load igmm/apps/BEDTools/2.25.0
+module load igmm/libs/libpng/1.6.18
+module load igmm/apps/ucsc/v326
+module load igmm/apps/python/3.5.2
+
+echo $1 $2
+
+bamCoverage -bl ~/blacklist/hg38-blacklist.v2.bed -p 4 --binSize 20 --scaleFactor=$2 -b $1.sorted.bam -o $1.$2.scaled.20.bw
+```
+
+The BWs were then uploaded onto UCSC genome browser as before.
+
+
+### Stranded BWs
+
+BWs of each strand were also generated using the scale factors.
+
+```bash
+module load igmm/apps/BEDTools/2.25.0
+module load igmm/libs/libpng/1.6.18
+module load igmm/apps/ucsc/v326
+module load igmm/apps/python/3.5.2
+
+echo $1 $2
+
+bamCoverage -bl hg38-blacklist.v2.bed -p 4 --filterRNAstrand forward --binSize 20 --scaleFactor=$2 -b $1.sorted.bam -o $1.20.fwd.bw
+bamCoverage -bl hg38-blacklist.v2.bed -p 4 --filterRNAstrand reverse --binSize 20 --scaleFactor=$2 -b $1.sorted.bam -o $1.20.rv.bw
+```
+
+
+### Plot generation
+
+
+Package were loaded
+
+```
+library(tidyverse)
+library(gtools)
+```
+
+Files were opened and filtered by genes by genes with normalised counts greater than 10 TPM.
+
+Gene types were also able to be filtered if interested.
+
+```R
+KD15vC15 <- read.csv("deseq2_results/KD_15_V_ctrl_15_deg.csv")
+
+counts <- read.csv("deseq2_results/deseq2_norm_counts.csv")
+
+counts <- counts %>% filter(Ctrl_NHS_A > 10 & Ctrl_NHS_B > 10 & Ctrl_15_A > 10 & Ctrl_15_B > 10)
+#counts <- counts %>% filter(gene_biotype == c("protein_coding", "lncRNA"))
+#counts <- counts %>% filter(gene_biotype == c("protein_coding"))
+#counts <- counts[!(counts$gene_symbol==""),]
+```
+
+The filter from counts was applied to the comparisons.
+
+```R
+genes <- counts$gene_id
+
+KD15vC15 <- KD15vC15 %>% filter(gene_id %in% genes)
+```
+
+A column in the comparisons was produced to indicate whether genes were significantly up/downregulated.
+
+```R
+KD15vC15 %>% filter(log2FoldChange < -1 & padj < 0.05 | log2FoldChange > 1 & padj < 0.05) -> reg
+reg_genes <- reg$gene_id
+KD15vC15$gene_id %in% reg_genes -> KD15vC15$reg
+```
+
+GGplot2 was used to plot volcano plots
+
+```R
+ggplot(KD15vC15, aes(x=(log2FoldChange), y=-log10(padj), col = reg)) + geom_point(alpha=0.3, stroke=0) +
+  xlim(-5.5,5.5) + ylim(-0.2,35) +
+  theme_classic() +
+  scale_color_manual(values = c("#000000", "#FF0000")) +
+  theme(legend.position = "none")
+```
+
+GGplot2 was used to generate density plots
+
+```R
+ggplot(counts) + geom_density(aes(x=log10(Ctrl_NHS)), alpha=0.2) + geom_density(aes(x=log10(KD_NHS)), colour='red') +
+  theme_classic() +
+  ylim(0,1) +
+  xlim(1,5)
+```
+
+The VennDiagram package was used to generate venn diagrams.
+
+```R
+library(VennDiagram)
+
+venn.diagram(
+  x = list(up_15, up_30),
+  category.names = c("15", "30"),
+  filename = 'Up_NHS_KD_venn_diagramm.png',
+  output=TRUE)
+```
+
+GGplot2 was used to generate CDF plots.
+
+```R
+pivot_longer(data=counts,
+             cols = c(Ctrl_NHS, Ctrl_15, KD_NHS, KD_15),
+             names_to = "class",
+             values_to = "values") -> plot
+
+group.colours <- c("blue","lightblue","red","orange")
+ggplot(plot, aes(log10(values), colour=class)) + stat_ecdf() +
+  theme_classic() +
+  scale_color_manual(values = group.colours) +
+  xlim(0,5)
+```
+
+
